@@ -661,3 +661,63 @@ footer p {
     padding: 25px 20px;
   }
 }
+
+/* Fix navbar alignment and keep Login/Logout visible */
+.navbar {
+  width: 100%;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-left: 4%;
+  padding-right: 4%;
+  gap: 20px;
+}
+
+.logo {
+  flex-shrink: 0;
+}
+
+.nav-links {
+  display: flex;
+  align-items: center;
+  gap: 25px;
+  margin: 0 auto;
+}
+
+.nav-buttons {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+.user-name {
+  white-space: nowrap;
+}
+
+@media (max-width: 900px) {
+  .navbar {
+    padding-left: 2%;
+    padding-right: 2%;
+    gap: 10px;
+  }
+
+  .nav-links {
+    gap: 12px;
+  }
+}
+
+@media (max-width: 650px) {
+  .navbar {
+    flex-wrap: wrap;
+  }
+
+  .nav-links {
+    order: 3;
+    width: 100%;
+    justify-content: center;
+  }
+}

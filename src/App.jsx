@@ -12,6 +12,8 @@ import {
 
 import { auth } from "./firebase";
 
+const API_URL = "http://localhost:5000/api/items";
+
 const initialItems = [
   {
     id: 1,
@@ -60,8 +62,50 @@ const categories = [
   { name: "Other Items", emoji: "📦" },
 ];
 
+// Format backend items for the frontend
+const formatItems = (data) => {
+  return data.map((item) => {
+    let itemDate = "Recently reported";
+
+    if (item.createdAt?._seconds) {
+      itemDate = new Date(
+        item.createdAt._seconds * 1000
+      ).toLocaleDateString("en-GB", {
+        day: "2-digit",
+        month: "short",
+        year: "numeric",
+      });
+    } else if (item.createdAt) {
+      const parsedDate = new Date(item.createdAt);
+
+      if (!Number.isNaN(parsedDate.getTime())) {
+        itemDate = parsedDate.toLocaleDateString("en-GB", {
+          day: "2-digit",
+          month: "short",
+          year: "numeric",
+        });
+      }
+    }
+
+    return {
+      id: item.id,
+      name: item.itemName || "Unnamed Item",
+      category: item.category || "Other Items",
+      location: item.location || "Location not specified",
+      status: item.status || "Lost",
+      date: itemDate,
+      emoji: "📦",
+      description: item.description || "",
+      imageUrl: item.imageUrl || "",
+      userId: item.userId,
+    };
+  });
+};
+
 function App() {
   const [items, setItems] = useState(initialItems);
+  const [itemsLoading, setItemsLoading] = useState(true);
+  const [itemsError, setItemsError] = useState("");
 
   const [search, setSearch] = useState("");
   const [activeFilter, setActiveFilter] = useState("All");
@@ -90,34 +134,82 @@ function App() {
     description: "",
   });
 
-  // Check Firebase login session and retrieve ID token
+  // Edit item states
+  const [editingItem, setEditingItem] = useState(null);
+  const [editData, setEditData] = useState({
+    name: "",
+    category: "",
+    location: "",
+    status: "Lost",
+    description: "",
+  });
+  const [actionLoading, setActionLoading] = useState(false);
+
+  // Fetch items from backend
+  const refreshItems = async () => {
+    const response = await fetch(API_URL);
+
+    if (!response.ok) {
+      throw new Error("Unable to refresh items.");
+    }
+
+    const data = await response.json();
+
+    if (!Array.isArray(data)) {
+      throw new Error("Invalid response received from backend.");
+    }
+
+    setItems(formatItems(data));
+  };
+
+  // Check Firebase login session
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
       setUser(currentUser);
 
       if (currentUser) {
-        try {
-          const token = await currentUser.getIdToken();
-          console.log("Firebase ID Token:", token);
-          console.log("Firebase user authenticated successfully!");
-        } catch (error) {
-          console.error("Unable to retrieve Firebase ID token:", error);
-        }
+        console.log("Firebase user authenticated successfully!");
       }
     });
 
     return () => unsubscribe();
   }, []);
 
+  // Load items when the application starts
+  useEffect(() => {
+    const fetchItems = async () => {
+      try {
+        setItemsLoading(true);
+        setItemsError("");
+
+        await refreshItems();
+
+        console.log("Items fetched successfully!");
+      } catch (error) {
+        console.error("Error fetching items:", error);
+
+        setItemsError(
+          "Unable to load items from the backend. Please check whether the backend server is running."
+        );
+      } finally {
+        setItemsLoading(false);
+      }
+    };
+
+    fetchItems();
+  }, []);
+
   // Open Login or Sign Up
   const openAuth = (mode) => {
     setAuthMode(mode);
     setAuthError("");
+
     setAuthData({
       name: "",
       email: "",
       password: "",
     });
+
     setShowAuth(true);
   };
 
@@ -165,11 +257,7 @@ function App() {
         alert("Login successful!");
       }
 
-      // Get Firebase ID token after successful login/signup
-      const token = await userCredential.user.getIdToken();
-
-      console.log("Firebase ID Token:", token);
-      console.log("Token retrieved successfully!");
+      console.log("Authentication completed successfully!");
 
       setShowAuth(false);
 
@@ -229,6 +317,7 @@ function App() {
     setShowForm(true);
   };
 
+  // Handle report form changes
   const handleChange = (e) => {
     setFormData({
       ...formData,
@@ -236,33 +325,181 @@ function App() {
     });
   };
 
-  // Existing report form - currently local React state only
-  const handleSubmit = (e) => {
+  // Submit report to Express backend
+  const handleSubmit = async (e) => {
     e.preventDefault();
 
-    const newItem = {
-      id: Date.now(),
-      name: formData.name,
-      category: formData.category,
-      location: formData.location,
-      status: reportType,
-      date: new Date().toLocaleDateString("en-GB", {
-        day: "2-digit",
-        month: "short",
-        year: "numeric",
-      }),
-      emoji: "📦",
-      description: formData.description,
-    };
+    if (!user) {
+      setShowForm(false);
+      openAuth("login");
+      alert("Please login before reporting an item.");
+      return;
+    }
 
-    setItems((previousItems) => [newItem, ...previousItems]);
+    try {
+      const token = await user.getIdToken();
 
-    setSearch("");
-    setActiveFilter("All");
-    setActiveCategory("All");
-    setShowForm(false);
+      const response = await fetch(API_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          itemName: formData.name,
+          category: formData.category,
+          location: formData.location,
+          status: reportType,
+          description: formData.description,
+          imageUrl: "",
+        }),
+      });
 
-    alert(`${reportType} item reported successfully!`);
+      const result = await response.json();
+
+      if (!response.ok) {
+        throw new Error(result.message || "Unable to submit report.");
+      }
+
+      await refreshItems();
+
+      setSearch("");
+      setActiveFilter("All");
+      setActiveCategory("All");
+      setShowForm(false);
+
+      setFormData({
+        name: "",
+        category: "Electronics",
+        location: "",
+        description: "",
+      });
+
+      alert(`${reportType} item reported successfully!`);
+    } catch (error) {
+      console.error("Report submission error:", error);
+      alert(error.message || "Something went wrong. Please try again.");
+    }
+  };
+
+  // Open Edit Item form
+  const openEditForm = (item) => {
+    setEditingItem(item);
+
+    setEditData({
+      name: item.name,
+      category: item.category,
+      location: item.location,
+      status: item.status,
+      description: item.description || "",
+    });
+  };
+
+  // Handle Edit form changes
+  const handleEditChange = (e) => {
+    setEditData({
+      ...editData,
+      [e.target.name]: e.target.value,
+    });
+  };
+
+  // Update item through backend
+  const handleEditSubmit = async (e) => {
+    e.preventDefault();
+
+    if (!user || !editingItem) {
+      alert("Please login to edit your item.");
+      return;
+    }
+
+    try {
+      setActionLoading(true);
+
+      const token = await user.getIdToken();
+
+      const updateData = {
+        itemName: editData.name.trim(),
+        category: editData.category,
+        location: editData.location.trim(),
+        status: editData.status,
+      };
+
+      // Send description only when it is not empty.
+      // The current backend rejects empty strings for updates.
+      if (editData.description.trim()) {
+        updateData.description = editData.description.trim();
+      }
+
+      const response = await fetch(`${API_URL}/${editingItem.id}`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(updateData),
+      });
+
+      const result = await response.json();
+
+      if (!response.ok) {
+        throw new Error(result.message || "Unable to update item.");
+      }
+
+      await refreshItems();
+
+      setEditingItem(null);
+
+      alert("Item updated successfully!");
+    } catch (error) {
+      console.error("Update error:", error);
+      alert(error.message || "Unable to update item.");
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  // Delete item through backend
+  const handleDelete = async (item) => {
+    if (!user) {
+      alert("Please login to delete your item.");
+      return;
+    }
+
+    const confirmDelete = window.confirm(
+      `Are you sure you want to delete "${item.name}"?`
+    );
+
+    if (!confirmDelete) {
+      return;
+    }
+
+    try {
+      setActionLoading(true);
+
+      const token = await user.getIdToken();
+
+      const response = await fetch(`${API_URL}/${item.id}`, {
+        method: "DELETE",
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+
+      const result = await response.json();
+
+      if (!response.ok) {
+        throw new Error(result.message || "Unable to delete item.");
+      }
+
+      await refreshItems();
+
+      alert("Item deleted successfully!");
+    } catch (error) {
+      console.error("Delete error:", error);
+      alert(error.message || "Unable to delete item.");
+    } finally {
+      setActionLoading(false);
+    }
   };
 
   // Search and filter items
@@ -493,38 +730,110 @@ function App() {
             </p>
           )}
 
-          <div className="item-grid">
-            {filteredItems.length > 0 ? (
-              filteredItems.map((item) => (
-                <div className="item-card" key={item.id}>
-                  <div className="item-image">
-                    <span>{item.emoji}</span>
+          {itemsLoading && (
+            <p className="no-results">Loading items...</p>
+          )}
 
-                    <span
-                      className={`status ${
-                        item.status === "Lost" ? "lost" : "found"
-                      }`}
-                    >
-                      {item.status}
-                    </span>
+          {!itemsLoading && itemsError && (
+            <div className="no-results">
+              <p>{itemsError}</p>
+              <button
+                className="secondary-btn"
+                onClick={() => window.location.reload()}
+              >
+                Retry
+              </button>
+            </div>
+          )}
+
+          {!itemsLoading && !itemsError && (
+            <div className="item-grid">
+              {filteredItems.length > 0 ? (
+                filteredItems.map((item) => (
+                  <div className="item-card" key={item.id}>
+                    <div className="item-image">
+                      {item.imageUrl ? (
+                        <img
+                          src={item.imageUrl}
+                          alt={item.name}
+                          className="item-photo"
+                        />
+                      ) : (
+                        <span>{item.emoji}</span>
+                      )}
+
+                      <span
+                        className={`status ${
+                          item.status === "Lost" ? "lost" : "found"
+                        }`}
+                      >
+                        {item.status}
+                      </span>
+                    </div>
+
+                    <div className="item-details">
+                      <span className="item-category">{item.category}</span>
+
+                      <h3>{item.name}</h3>
+                      <p>📍 {item.location}</p>
+
+                      {item.description && <p>{item.description}</p>}
+
+                      <div className="item-date">{item.date}</div>
+
+                      {/* Edit and Delete buttons for the item's owner */}
+                      {user && item.userId === user.uid && (
+                        <div
+                          className="item-actions"
+                          style={{
+                            display: "flex",
+                            gap: "10px",
+                            marginTop: "15px",
+                          }}
+                        >
+                          <button
+                            type="button"
+                            className="edit-btn"
+                            disabled={actionLoading}
+                            onClick={() => openEditForm(item)}
+                            style={{
+                              padding: "9px 16px",
+                              border: "none",
+                              borderRadius: "6px",
+                              backgroundColor: "#2563eb",
+                              color: "white",
+                              cursor: "pointer",
+                            }}
+                          >
+                            ✏️ Edit
+                          </button>
+
+                          <button
+                            type="button"
+                            className="delete-btn"
+                            disabled={actionLoading}
+                            onClick={() => handleDelete(item)}
+                            style={{
+                              padding: "9px 16px",
+                              border: "none",
+                              borderRadius: "6px",
+                              backgroundColor: "#dc2626",
+                              color: "white",
+                              cursor: "pointer",
+                            }}
+                          >
+                            🗑️ Delete
+                          </button>
+                        </div>
+                      )}
+                    </div>
                   </div>
-
-                  <div className="item-details">
-                    <span className="item-category">{item.category}</span>
-
-                    <h3>{item.name}</h3>
-                    <p>📍 {item.location}</p>
-
-                    {item.description && <p>{item.description}</p>}
-
-                    <div className="item-date">{item.date}</div>
-                  </div>
-                </div>
-              ))
-            ) : (
-              <p className="no-results">No matching items found.</p>
-            )}
-          </div>
+                ))
+              ) : (
+                <p className="no-results">No matching items found.</p>
+              )}
+            </div>
+          )}
         </section>
 
         {/* Call to Action */}
@@ -655,7 +964,9 @@ function App() {
                   setAuthMode(
                     authMode === "login" ? "signup" : "login"
                   );
+
                   setAuthError("");
+
                   setAuthData({
                     name: "",
                     email: "",
@@ -670,7 +981,7 @@ function App() {
         </div>
       )}
 
-      {/* Existing Report Form */}
+      {/* Report Form */}
       {showForm && (
         <div
           className="modal-overlay"
@@ -741,6 +1052,100 @@ function App() {
 
               <button type="submit" className="primary-btn submit-btn">
                 Submit Report
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Item Modal */}
+      {editingItem && (
+        <div
+          className="modal-overlay"
+          onClick={() => {
+            if (!actionLoading) setEditingItem(null);
+          }}
+        >
+          <div
+            className="report-modal"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button
+              className="close-modal"
+              type="button"
+              disabled={actionLoading}
+              onClick={() => setEditingItem(null)}
+            >
+              ✕
+            </button>
+
+            <h2>Edit Item</h2>
+            <p>Update the details of your reported item.</p>
+
+            <form onSubmit={handleEditSubmit}>
+              <label>Item Name</label>
+
+              <input
+                type="text"
+                name="name"
+                value={editData.name}
+                onChange={handleEditChange}
+                required
+              />
+
+              <label>Category</label>
+
+              <select
+                name="category"
+                value={editData.category}
+                onChange={handleEditChange}
+                required
+              >
+                <option>Electronics</option>
+                <option>Accessories</option>
+                <option>Personal Items</option>
+                <option>Documents</option>
+                <option>Bags</option>
+                <option>Books</option>
+                <option>Other Items</option>
+              </select>
+
+              <label>Location</label>
+
+              <input
+                type="text"
+                name="location"
+                value={editData.location}
+                onChange={handleEditChange}
+                required
+              />
+
+              <label>Status</label>
+
+              <select
+                name="status"
+                value={editData.status}
+                onChange={handleEditChange}
+                required
+              >
+                <option value="Lost">Lost</option>
+                <option value="Found">Found</option>
+              </select>
+
+              <label>Description (optional)</label>
+
+              <textarea
+                name="description"
+                value={editData.description}
+                onChange={handleEditChange}
+              />
+
+              <button
+                type="submit"
+                className="primary-btn submit-btn"
+                disabled={actionLoading}
+              >
+                {actionLoading ? "Updating..." : "Save Changes"}
               </button>
             </form>
           </div>
